@@ -104,6 +104,7 @@ async def lookup(request: Request):
                 "title": b.title,
                 "author": b.author,
                 "description": b.description[:200] if b.description else "",
+                "page_count": b.page_count,
                 "price": b.price,
                 "image_url": b.image_url,
                 "image_source": b.image_source,

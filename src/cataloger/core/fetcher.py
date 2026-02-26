@@ -63,25 +63,55 @@ class BookFetcher:
             log.debug("openlibrary_metadata_error", isbn=isbn, error=str(e))
             return None
 
-    async def fetch_works_description(
+    async def fetch_works_data(
         self, client: httpx.AsyncClient, works_key: str, isbn: str
-    ) -> str:
-        """Fetch description from Open Library Works endpoint."""
+    ) -> dict:
+        """Fetch description and authors from Open Library Works endpoint.
+
+        Returns dict with 'description' and 'authors' keys.
+        """
         url = f"https://openlibrary.org{works_key}.json"
+        result: dict = {"description": "", "authors": []}
         try:
             resp = await client.get(url, timeout=10)
             if resp.status_code != 200:
-                return ""
+                return result
             data = resp.json()
+
             desc = data.get("description", "")
             if isinstance(desc, dict):
                 desc = desc.get("value", "")
-            if desc:
-                log.debug("works_description_found", isbn=isbn, works_key=works_key)
-            return desc
+            result["description"] = desc
+
+            # Authors on Works are stored as {"author": {"key": "/authors/..."}}
+            author_keys = []
+            for entry in data.get("authors", []):
+                key = entry.get("author", {}).get("key", "")
+                if key:
+                    author_keys.append(key)
+            authors = []
+            for key in author_keys:
+                a_resp = await client.get(
+                    f"https://openlibrary.org{key}.json", timeout=10
+                )
+                if a_resp.status_code == 200:
+                    name = a_resp.json().get("name", "")
+                    if name:
+                        authors.append(name)
+            result["authors"] = authors
+
+            if desc or authors:
+                log.debug(
+                    "works_data_found",
+                    isbn=isbn,
+                    works_key=works_key,
+                    has_desc=bool(desc),
+                    authors=authors,
+                )
+            return result
         except httpx.HTTPError as e:
-            log.debug("works_description_error", isbn=isbn, error=str(e))
-            return ""
+            log.debug("works_data_error", isbn=isbn, error=str(e))
+            return result
 
     async def fetch_google_books(
         self, client: httpx.AsyncClient, isbn: str
@@ -233,12 +263,14 @@ class BookFetcher:
             book.description = metadata.get("description", "")
             book.page_count = metadata.get("pageCount", 0)
 
-            # 2. If no description, try Works endpoint
+            # 2. If missing description or author, try Works endpoint
             works_key = metadata.get("works_key", "")
-            if not book.description and works_key:
-                book.description = await self.fetch_works_description(
-                    client, works_key, isbn
-                )
+            if works_key and (not book.description or not book.author):
+                works = await self.fetch_works_data(client, works_key, isbn)
+                if not book.description and works["description"]:
+                    book.description = works["description"]
+                if not book.author and works["authors"]:
+                    book.author = ", ".join(works["authors"])
         else:
             book.errors.append("No metadata found")
 

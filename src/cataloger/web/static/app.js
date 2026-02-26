@@ -112,6 +112,23 @@ function showResults(data) {
     authorTd.textContent = book.author || "—";
     tr.appendChild(authorTd);
 
+    // Description (truncated to ~100 chars)
+    const descTd = document.createElement("td");
+    const desc = book.description || "";
+    if (desc) {
+      descTd.className = "text-sm max-w-60";
+      descTd.textContent = desc.length > 100 ? desc.slice(0, 100) + "…" : desc;
+      descTd.title = desc;
+    } else {
+      descTd.textContent = "—";
+    }
+    tr.appendChild(descTd);
+
+    // Pages
+    const pagesTd = document.createElement("td");
+    pagesTd.textContent = book.page_count ? book.page_count : "—";
+    tr.appendChild(pagesTd);
+
     // Price
     const priceTd = document.createElement("td");
     priceTd.textContent = book.price ? `$${book.price}` : "—";
