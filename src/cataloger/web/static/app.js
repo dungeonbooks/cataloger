@@ -29,7 +29,7 @@ async function generate() {
 
   const progressFill = document.getElementById("progress-fill");
   const progressText = document.getElementById("progress-text");
-  progressFill.style.width = "20%";
+  progressFill.value = 20;
   progressText.textContent = `Looking up ${isbns.length} book${isbns.length > 1 ? "s" : ""}...`;
 
   document.getElementById("generate-btn").disabled = true;
@@ -41,7 +41,7 @@ async function generate() {
       body: JSON.stringify({ isbns, location }),
     });
 
-    progressFill.style.width = "90%";
+    progressFill.value = 90;
 
     if (!resp.ok) {
       const err = await resp.json();
@@ -51,7 +51,7 @@ async function generate() {
     const data = await resp.json();
     currentSessionId = data.session_id;
 
-    progressFill.style.width = "100%";
+    progressFill.value = 100;
     progressText.textContent = "Done!";
 
     setTimeout(() => showResults(data), 300);
@@ -86,12 +86,12 @@ function showResults(data) {
       const img = document.createElement("img");
       img.src = book.image_url;
       img.alt = book.title || book.isbn;
-      img.className = "cover-thumb";
+      img.className = "w-10 h-14 object-cover rounded";
       img.loading = "lazy";
       coverTd.appendChild(img);
     } else {
       const div = document.createElement("div");
-      div.className = "no-cover";
+      div.className = "w-10 h-14 bg-base-200 rounded flex items-center justify-center text-xs opacity-50";
       div.textContent = "N/A";
       coverTd.appendChild(div);
     }
@@ -119,13 +119,15 @@ function showResults(data) {
 
     // Status
     const statusTd = document.createElement("td");
+    const statusBadge = document.createElement("span");
     if (book.errors.length > 0) {
-      statusTd.className = "status-error";
-      statusTd.textContent = book.errors.join(", ");
+      statusBadge.className = "badge badge-error";
+      statusBadge.textContent = book.errors.join(", ");
     } else {
-      statusTd.className = "status-ok";
-      statusTd.textContent = "OK";
+      statusBadge.className = "badge badge-success";
+      statusBadge.textContent = "OK";
     }
+    statusTd.appendChild(statusBadge);
     tr.appendChild(statusTd);
 
     tbody.appendChild(tr);
@@ -144,16 +146,16 @@ function reset() {
   hide("progress-section");
   show("input-section");
   document.getElementById("generate-btn").disabled = false;
-  document.getElementById("progress-fill").style.width = "0%";
+  document.getElementById("progress-fill").value = 0;
 }
 
 function showError(msg) {
   // Remove any existing error
-  const existing = document.querySelector(".error-message");
+  const existing = document.querySelector(".alert-error");
   if (existing) existing.remove();
 
   const div = document.createElement("div");
-  div.className = "error-message";
+  div.className = "alert alert-error mb-4";
   div.textContent = msg;
   document.getElementById("input-section").prepend(div);
 

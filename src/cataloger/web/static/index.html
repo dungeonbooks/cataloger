@@ -1,69 +1,81 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cataloger — ISBN to Square Catalog</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-<body>
-  <div class="container">
-    <header>
-      <h1>Cataloger</h1>
-      <p class="subtitle">Turn ISBNs into a Square-ready catalog</p>
+<body class="min-h-screen bg-base-200">
+  <div class="max-w-3xl mx-auto p-4">
+    <header class="text-center mb-8">
+      <h1 class="text-3xl font-bold">Cataloger</h1>
+      <p class="text-base-content/60 mt-1">Turn ISBNs into a Square-ready catalog</p>
     </header>
 
     <main>
       <!-- Input Form -->
       <section id="input-section">
-        <div class="form-group">
-          <label for="location">Store name (as it appears in Square)</label>
-          <input type="text" id="location" placeholder="e.g. Bookstore" required>
-        </div>
+        <div class="card bg-base-100 shadow">
+          <div class="card-body">
+            <fieldset class="fieldset mb-2">
+              <legend class="fieldset-legend">Store name (as it appears in Square)</legend>
+              <input type="text" id="location" placeholder="e.g. Bookstore" required
+                     class="input input-bordered w-full">
+            </fieldset>
 
-        <div class="form-group">
-          <label for="isbns">ISBNs (one per line)</label>
-          <textarea id="isbns" rows="10" placeholder="9780553381696
-9780451457998
-9780141439518"></textarea>
-        </div>
+            <fieldset class="fieldset mb-2">
+              <legend class="fieldset-legend">ISBNs (one per line)</legend>
+              <textarea id="isbns" rows="10"
+                        placeholder="9780553381696&#10;9780451457998&#10;9780141439518"
+                        class="textarea textarea-bordered w-full font-mono"></textarea>
+            </fieldset>
 
-        <button id="generate-btn" onclick="generate()">Generate Catalog</button>
+            <button id="generate-btn" onclick="generate()" class="btn btn-primary btn-block mt-2">
+              Generate Catalog
+            </button>
+          </div>
+        </div>
       </section>
 
       <!-- Progress -->
       <section id="progress-section" class="hidden">
-        <div class="progress-bar">
-          <div class="progress-fill" id="progress-fill"></div>
+        <div class="card bg-base-100 shadow">
+          <div class="card-body items-center">
+            <progress id="progress-fill" class="progress progress-primary w-full" value="0" max="100"></progress>
+            <p id="progress-text" class="text-base-content/60 text-sm mt-2">Looking up books...</p>
+          </div>
         </div>
-        <p id="progress-text">Looking up books...</p>
       </section>
 
       <!-- Results -->
       <section id="results-section" class="hidden">
-        <div class="summary" id="summary"></div>
+        <div class="alert mb-4" id="summary"></div>
 
-        <div class="download-buttons">
-          <button onclick="downloadFile('csv')">Download CSV</button>
-          <button onclick="downloadFile('images')">Download Images</button>
-          <button onclick="downloadFile('all')" class="primary">Download All (CSV + Images)</button>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <button onclick="downloadFile('csv')" class="btn btn-outline">Download CSV</button>
+          <button onclick="downloadFile('images')" class="btn btn-outline">Download Images</button>
+          <button onclick="downloadFile('all')" class="btn btn-success">Download All (CSV + Images)</button>
         </div>
 
-        <table id="results-table">
-          <thead>
-            <tr>
-              <th>Cover</th>
-              <th>ISBN</th>
-              <th>Title</th>
-              <th>Author</th>
-              <th>Price</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="results-body"></tbody>
-        </table>
+        <div class="overflow-x-auto mb-4">
+          <table id="results-table" class="table table-zebra">
+            <thead>
+              <tr>
+                <th>Cover</th>
+                <th>ISBN</th>
+                <th>Title</th>
+                <th>Author</th>
+                <th>Price</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
 
-        <button class="secondary" onclick="reset()">Start Over</button>
+        <button class="btn btn-ghost" onclick="reset()">Start Over</button>
       </section>
     </main>
   </div>
