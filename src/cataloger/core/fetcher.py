@@ -16,41 +16,18 @@ log = structlog.get_logger()
 class BookFetcher:
     """Fetches book metadata and cover images from multiple sources.
 
-    Image waterfall: Bookcover API → Google Books thumbnail → Open Library.
-    Metadata waterfall: Google Books → Open Library.
+    Image waterfall: Bookcover API → Open Library.
+    Metadata: Open Library.
     """
 
     def __init__(self, image_dir: Path) -> None:
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
 
-    async def fetch_metadata(self, client: httpx.AsyncClient, isbn: str) -> dict | None:
-        """Fetch metadata from Google Books API with retry on 429."""
-        url = "https://www.googleapis.com/books/v1/volumes"
-        params = {"q": f"isbn:{isbn}"}
-        for attempt in range(3):
-            try:
-                resp = await client.get(url, params=params)
-                if resp.status_code == 429:
-                    wait = 2 ** (attempt + 1)
-                    log.debug("google_books_rate_limit", isbn=isbn, retry_in=wait)
-                    await asyncio.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                if data.get("totalItems", 0) == 0:
-                    return None
-                return data["items"][0]["volumeInfo"]
-            except httpx.HTTPError as e:
-                log.warning("google_books_error", isbn=isbn, error=str(e))
-                return None
-        log.warning("google_books_exhausted_retries", isbn=isbn)
-        return None
-
-    async def fetch_openlibrary_metadata(
+    async def fetch_metadata(
         self, client: httpx.AsyncClient, isbn: str
     ) -> dict | None:
-        """Fallback: fetch metadata from Open Library."""
+        """Fetch metadata from Open Library."""
         url = f"https://openlibrary.org/isbn/{isbn}.json"
         try:
             resp = await client.get(url, timeout=10, follow_redirects=True)
@@ -96,20 +73,6 @@ class BookFetcher:
             log.debug("bookcover_api_miss", isbn=isbn, error=str(e))
         return None
 
-    async def _try_google_thumbnail(
-        self, metadata: dict | None, isbn: str
-    ) -> str | None:
-        """Extract and upgrade Google Books thumbnail URL."""
-        if not metadata:
-            return None
-        image_links = metadata.get("imageLinks", {})
-        thumb = image_links.get("thumbnail") or image_links.get("smallThumbnail")
-        if thumb:
-            upgraded = thumb.replace("zoom=1", "zoom=3")
-            log.debug("google_thumbnail_hit", isbn=isbn)
-            return upgraded
-        return None
-
     def _open_library_url(self, isbn: str) -> str:
         return f"https://covers.openlibrary.org/b/isbn/{isbn}-L.jpg"
 
@@ -134,9 +97,8 @@ class BookFetcher:
         self,
         client: httpx.AsyncClient,
         isbn: str,
-        metadata: dict | None,
     ) -> tuple[Path | None, str, str]:
-        """Waterfall: Bookcover API → Google thumbnail → Open Library.
+        """Waterfall: Bookcover API → Open Library.
 
         Returns (path, source_name, image_url).
         """
@@ -147,14 +109,7 @@ class BookFetcher:
             if path:
                 return path, "bookcover_api", url
 
-        # 2. Google Books thumbnail
-        url = await self._try_google_thumbnail(metadata, isbn)
-        if url:
-            path = await self._download_image(client, url, isbn)
-            if path:
-                return path, "google_books", url
-
-        # 3. Open Library
+        # 2. Open Library
         url = self._open_library_url(isbn)
         path = await self._download_image(client, url, isbn)
         if path:
@@ -173,26 +128,10 @@ class BookFetcher:
             book.author = ", ".join(authors) if authors else ""
             book.description = metadata.get("description", "")
             book.page_count = metadata.get("pageCount", 0)
-            price_info = metadata.get("listPrice") or metadata.get("saleInfo", {}).get(
-                "listPrice"
-            )
-            if price_info and "amount" in price_info:
-                book.price = f"{price_info['amount']:.2f}"
         else:
-            ol_meta = await self.fetch_openlibrary_metadata(client, isbn)
-            if ol_meta:
-                book.title = ol_meta.get("title", "")
-                authors = ol_meta.get("authors", [])
-                book.author = ", ".join(authors) if authors else ""
-                book.description = ol_meta.get("description", "")
-                book.page_count = ol_meta.get("pageCount", 0)
-                log.info("openlibrary_metadata_used", isbn=isbn)
-            else:
-                book.errors.append("No metadata found")
+            book.errors.append("No metadata found")
 
-        image_path, source, image_url = await self.fetch_cover_image(
-            client, isbn, metadata
-        )
+        image_path, source, image_url = await self.fetch_cover_image(client, isbn)
         book.image_path = image_path
         book.image_source = source
         book.image_url = image_url
