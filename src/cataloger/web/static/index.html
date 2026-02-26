@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cataloger — ISBN to Square Catalog</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Cataloger</h1>
+      <p class="subtitle">Turn ISBNs into a Square-ready catalog</p>
+    </header>
+
+    <main>
+      <!-- Input Form -->
+      <section id="input-section">
+        <div class="form-group">
+          <label for="location">Store name (as it appears in Square)</label>
+          <input type="text" id="location" placeholder="e.g. Bookstore" required>
+        </div>
+
+        <div class="form-group">
+          <label for="isbns">ISBNs (one per line)</label>
+          <textarea id="isbns" rows="10" placeholder="9780553381696
+9780451457998
+9780141439518"></textarea>
+        </div>
+
+        <button id="generate-btn" onclick="generate()">Generate Catalog</button>
+      </section>
+
+      <!-- Progress -->
+      <section id="progress-section" class="hidden">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <p id="progress-text">Looking up books...</p>
+      </section>
+
+      <!-- Results -->
+      <section id="results-section" class="hidden">
+        <div class="summary" id="summary"></div>
+
+        <div class="download-buttons">
+          <button onclick="downloadFile('csv')">Download CSV</button>
+          <button onclick="downloadFile('images')">Download Images</button>
+          <button onclick="downloadFile('all')" class="primary">Download All (CSV + Images)</button>
+        </div>
+
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th>Cover</th>
+              <th>ISBN</th>
+              <th>Title</th>
+              <th>Author</th>
+              <th>Price</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+
+        <button class="secondary" onclick="reset()">Start Over</button>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

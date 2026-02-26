@@ -1,0 +1,32 @@
+[project]
+name = "cataloger"
+version = "0.1.0"
+description = "Turn a list of ISBNs into a Square-ready catalog import with cover images."
+readme = "README.md"
+authors = [
+    { name = "Panat Taranat", email = "panat@dungeonbooks.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.133.1",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "structlog>=25.5.0",
+    "uvicorn[standard]>=0.41.0",
+]
+
+[project.scripts]
+cataloger = "cataloger.web.app:main"
+
+[build-system]
+requires = ["uv_build>=0.9.0,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
