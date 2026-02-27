@@ -23,6 +23,9 @@
               <legend class="fieldset-legend">Store name (as it appears in Square)</legend>
               <input type="text" id="location" placeholder="e.g. Bookstore" required
                      class="input input-bordered w-full">
+              <p class="text-xs text-base-content/50 mt-1">
+                Find this at <a href="https://app.squareup.com/dashboard/locations" target="_blank" rel="noopener" class="link">Square Dashboard → Locations</a>. Use the exact name shown there.
+              </p>
             </fieldset>
 
             <fieldset class="fieldset mb-2">
@@ -30,11 +33,43 @@
               <textarea id="isbns" rows="10"
                         placeholder="9780553381696&#10;9780451457998&#10;9780141439518"
                         class="textarea textarea-bordered w-full font-mono"></textarea>
+              <p class="text-xs text-base-content/50 mt-1">
+                Paste ISBN-10 or ISBN-13 codes, one per line. Hyphens are stripped automatically. Max 100 per batch.
+              </p>
             </fieldset>
 
             <button id="generate-btn" onclick="generate()" class="btn btn-primary btn-block mt-2">
               Generate Catalog
             </button>
+          </div>
+        </div>
+
+        <!-- How it works -->
+        <div class="card bg-base-100 shadow mt-4">
+          <div class="card-body text-sm space-y-3">
+            <h2 class="card-title text-base">How it works</h2>
+            <ol class="list-decimal list-inside space-y-2">
+              <li><strong>Enter your Store Location name</strong> — this must match your Square Location exactly so the CSV maps items to the right store. You can find it at <a href="https://app.squareup.com/dashboard/locations" target="_blank" rel="noopener" class="link link-primary">Square Dashboard → Locations</a>.</li>
+              <li><strong>Paste your ISBNs</strong> — one per line. You can get these from barcode scanners, spreadsheets, or type them in manually.</li>
+              <li><strong>Generate</strong> — we look up each ISBN to find the title, author, description, cover image, and price.</li>
+              <li><strong>Download CSV</strong> — import this file into Square: go to <strong>Square Dashboard → Items → Import Items</strong> and upload the CSV.</li>
+              <li><strong>Download Images</strong> — a ZIP of cover images named by ISBN. You'll need to upload these to each item manually in Square since image upload requires a connected Square account (coming soon).</li>
+            </ol>
+            <div class="divider my-1"></div>
+            <div>
+              <p class="font-semibold mb-1">About cover images</p>
+              <p class="text-base-content/70">
+                Cover images are included in the download but <strong>cannot be imported via CSV</strong> — Square doesn't support that.
+                To add images, you'd need to upload them one-by-one in the Square Dashboard, or connect your Square account so we can upload them via the API.
+                Square account connection is planned for a future update.
+              </p>
+            </div>
+            <div>
+              <p class="font-semibold mb-1">Need help?</p>
+              <p class="text-base-content/70">
+                Reach out at <span id="support-email" class="link link-primary"></span>
+              </p>
+            </div>
           </div>
         </div>
       </section>

@@ -1,5 +1,20 @@
 let currentSessionId = null;
 
+// Assemble support email at runtime to deter scrapers
+(function () {
+  const el = document.getElementById("support-email");
+  if (!el) return;
+  const u = "panat";
+  const d = "dungeonbooks.com";
+  const addr = u + "@" + d;
+  el.textContent = addr;
+  el.closest("p").innerHTML =
+    el.closest("p").innerHTML.replace(
+      el.outerHTML,
+      '<a href="mai' + "lto:" + addr + '" class="link link-primary">' + addr + "</a>"
+    );
+})();
+
 async function generate() {
   const locationInput = document.getElementById("location");
   const isbnsInput = document.getElementById("isbns");
