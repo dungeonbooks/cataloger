@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 from pathlib import Path
 
 import httpx
@@ -12,6 +14,12 @@ from .cache import BookCache
 from .models import BookData
 
 log = structlog.get_logger()
+
+# Open Library API compliance (https://openlibrary.org/developers/api)
+# Identified requests get 3 req/s; unidentified get 1 req/s.
+_OL_CONTACT = os.environ.get("OL_CONTACT_EMAIL", "")
+_OL_USER_AGENT = f"DungeonBooksCataloger/0.1.0 ({_OL_CONTACT})" if _OL_CONTACT else "DungeonBooksCataloger/0.1.0"
+_OL_MIN_INTERVAL = 0.35  # seconds between Open Library requests (~2.8 req/s, within 3 req/s limit)
 
 HARDCOVER_QUERY = """
 query ($isbn: String!) {
@@ -52,6 +60,27 @@ class BookFetcher:
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self.hardcover_token = hardcover_token
         self.cache = cache
+        self._ol_last_request: float = 0.0  # monotonic timestamp of last OL request
+
+    async def _ol_get(
+        self, client: httpx.AsyncClient, url: str, **kwargs: object
+    ) -> httpx.Response:
+        """Rate-limited GET for Open Library endpoints.
+
+        Enforces per-request throttling and sets the required User-Agent header.
+        """
+        kwargs.setdefault("timeout", 10)
+        kwargs.setdefault("headers", {})
+        kwargs["headers"]["User-Agent"] = _OL_USER_AGENT  # type: ignore[index]
+
+        # Enforce minimum interval between OL requests
+        now = time.monotonic()
+        elapsed = now - self._ol_last_request
+        if elapsed < _OL_MIN_INTERVAL:
+            await asyncio.sleep(_OL_MIN_INTERVAL - elapsed)
+        self._ol_last_request = time.monotonic()
+
+        return await client.get(url, **kwargs)
 
     async def fetch_hardcover(
         self, client: httpx.AsyncClient, isbn: str
@@ -143,7 +172,7 @@ class BookFetcher:
         """Fetch metadata from Open Library edition endpoint."""
         url = f"https://openlibrary.org/isbn/{isbn}.json"
         try:
-            resp = await client.get(url, timeout=10, follow_redirects=True)
+            resp = await self._ol_get(url=url, client=client, follow_redirects=True)
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
@@ -153,8 +182,8 @@ class BookFetcher:
             authors = []
             for key in author_keys:
                 if key:
-                    a_resp = await client.get(
-                        f"https://openlibrary.org{key}.json", timeout=10
+                    a_resp = await self._ol_get(
+                        client=client, url=f"https://openlibrary.org{key}.json"
                     )
                     if a_resp.status_code == 200:
                         authors.append(a_resp.json().get("name", ""))
@@ -185,7 +214,7 @@ class BookFetcher:
         url = f"https://openlibrary.org{works_key}.json"
         result: dict = {"description": "", "authors": []}
         try:
-            resp = await client.get(url, timeout=10)
+            resp = await self._ol_get(client=client, url=url)
             if resp.status_code != 200:
                 return result
             data = resp.json()
@@ -203,8 +232,8 @@ class BookFetcher:
                     author_keys.append(key)
             authors = []
             for key in author_keys:
-                a_resp = await client.get(
-                    f"https://openlibrary.org{key}.json", timeout=10
+                a_resp = await self._ol_get(
+                    client=client, url=f"https://openlibrary.org{key}.json"
                 )
                 if a_resp.status_code == 200:
                     name = a_resp.json().get("name", "")
@@ -262,6 +291,23 @@ class BookFetcher:
             log.debug("image_download_failed", isbn=isbn, url=url, error=str(e))
             return None
 
+    async def _download_ol_image(
+        self, client: httpx.AsyncClient, url: str, isbn: str
+    ) -> Path | None:
+        """Download an Open Library image with rate limiting and User-Agent."""
+        try:
+            resp = await self._ol_get(client=client, url=url, timeout=15, follow_redirects=True)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if len(resp.content) < 1000 or "text/html" in content_type:
+                return None
+            dest = self.image_dir / f"{isbn}.jpg"
+            dest.write_bytes(resp.content)
+            return dest
+        except httpx.HTTPError as e:
+            log.debug("image_download_failed", isbn=isbn, url=url, error=str(e))
+            return None
+
     async def fetch_cover_image(
         self,
         client: httpx.AsyncClient,
@@ -285,9 +331,9 @@ class BookFetcher:
             if path:
                 return path, "bookcover_api", url
 
-        # 3. Open Library
+        # 3. Open Library (rate-limited)
         url = self._open_library_url(isbn)
-        path = await self._download_image(client, url, isbn)
+        path = await self._download_ol_image(client, url, isbn)
         if path:
             return path, "open_library", url
 
@@ -412,6 +458,6 @@ class BookFetcher:
                 results.append(book)
                 if on_progress:
                     on_progress(i + 1, len(isbns), book)
-                if i < len(isbns) - 1 and not self._last_cache_hit:
-                    await asyncio.sleep(0.3)
+                # Rate limiting is handled per-request in _ol_get; no extra
+                # sleep needed between ISBNs.
         return results
