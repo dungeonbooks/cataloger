@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
+
+from dotenv import load_dotenv
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -19,6 +22,8 @@ from ..core.catalog import generate_csv_bytes
 from ..core.fetcher import BookFetcher
 from ..core.images import create_combined_zip, create_image_zip
 from ..core.models import BookData
+
+load_dotenv()
 
 log = structlog.get_logger()
 
@@ -80,7 +85,8 @@ async def lookup(request: Request):
     tmp_dir = Path(tempfile.mkdtemp(prefix="cataloger_"))
     image_dir = tmp_dir / "images"
 
-    fetcher = BookFetcher(image_dir=image_dir)
+    hardcover_token = os.environ.get("HARDCOVER_TOKEN", "")
+    fetcher = BookFetcher(image_dir=image_dir, hardcover_token=hardcover_token)
     books = await fetcher.fetch_all(isbns)
 
     _clean_expired()
@@ -106,6 +112,7 @@ async def lookup(request: Request):
                 "description": b.description[:200] if b.description else "",
                 "page_count": b.page_count,
                 "price": b.price,
+                "genres": b.genres,
                 "image_url": b.image_url,
                 "image_source": b.image_source,
                 "errors": b.errors,

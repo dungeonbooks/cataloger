@@ -41,6 +41,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "python-dotenv" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -50,6 +51,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.133.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "structlog", specifier = ">=25.5.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.41.0" },
 ]

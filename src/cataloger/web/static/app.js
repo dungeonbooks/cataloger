@@ -129,6 +129,21 @@ function showResults(data) {
     pagesTd.textContent = book.page_count ? book.page_count : "—";
     tr.appendChild(pagesTd);
 
+    // Genres
+    const genresTd = document.createElement("td");
+    if (book.genres && book.genres.length > 0) {
+      genresTd.className = "flex flex-wrap gap-1";
+      for (const genre of book.genres.slice(0, 5)) {
+        const badge = document.createElement("span");
+        badge.className = "badge badge-outline badge-sm";
+        badge.textContent = genre;
+        genresTd.appendChild(badge);
+      }
+    } else {
+      genresTd.textContent = "—";
+    }
+    tr.appendChild(genresTd);
+
     // Price
     const priceTd = document.createElement("td");
     priceTd.textContent = book.price ? `$${book.price}` : "—";

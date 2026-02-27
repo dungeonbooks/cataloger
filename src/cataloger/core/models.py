@@ -14,6 +14,7 @@ class BookData:
     description: str = ""
     page_count: int = 0
     price: str = ""
+    genres: list[str] = field(default_factory=list)
     image_path: Path | None = None
     image_url: str = ""
     image_source: str = ""

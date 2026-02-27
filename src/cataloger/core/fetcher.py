@@ -12,18 +12,123 @@ from .models import BookData
 
 log = structlog.get_logger()
 
+HARDCOVER_QUERY = """
+query ($isbn: String!) {
+  editions(where: {isbn_13: {_eq: $isbn}}) {
+    title
+    pages
+    image {
+      url
+    }
+    book {
+      description
+      contributions {
+        author {
+          name
+        }
+      }
+      cached_tags
+    }
+  }
+}
+"""
+
 
 class BookFetcher:
     """Fetches book metadata and cover images from multiple sources.
 
-    Metadata: Open Library (primary) → Google Books (enrichment).
-    Image waterfall: Bookcover API → Google Books thumbnail → Open Library.
+    Metadata: Hardcover (primary) → Open Library (fallback).
+    Image waterfall: Hardcover image → Bookcover API → Open Library.
     """
 
-    def __init__(self, image_dir: Path) -> None:
+    def __init__(self, image_dir: Path, hardcover_token: str = "") -> None:
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
-        self._google_books_disabled = False
+        self.hardcover_token = hardcover_token
+
+    async def fetch_hardcover(
+        self, client: httpx.AsyncClient, isbn: str
+    ) -> dict | None:
+        """Fetch metadata from Hardcover GraphQL API.
+
+        Returns dict with title, author, description, pages, genres, cover_url
+        or None if no match.
+        """
+        if not self.hardcover_token:
+            return None
+
+        url = "https://api.hardcover.app/v1/graphql"
+        headers = {"Authorization": self.hardcover_token, "Content-Type": "application/json"}
+
+        try:
+            resp = await client.post(
+                url,
+                json={"query": HARDCOVER_QUERY, "variables": {"isbn": isbn}},
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            editions = data.get("data", {}).get("editions", [])
+            if not editions:
+                log.debug("hardcover_no_match", isbn=isbn)
+                return None
+
+            edition = editions[0]
+            book = edition.get("book") or {}
+
+            # Title from edition
+            title = edition.get("title", "")
+
+            # Authors from contributions
+            authors = []
+            for contrib in book.get("contributions", []):
+                name = contrib.get("author", {}).get("name", "")
+                if name:
+                    authors.append(name)
+
+            # Description from book
+            desc = book.get("description", "") or ""
+
+            # Pages from edition
+            pages = edition.get("pages") or 0
+
+            # Genres from cached_tags (dict keyed by category)
+            genres = []
+            cached_tags = book.get("cached_tags") or {}
+            for entry in cached_tags.get("Genre", []):
+                tag_name = entry.get("tag", "")
+                if tag_name:
+                    genres.append(tag_name)
+
+            # Cover image
+            cover_url = ""
+            image = edition.get("image") or {}
+            if image.get("url"):
+                cover_url = image["url"]
+
+            log.debug(
+                "hardcover_hit",
+                isbn=isbn,
+                title=title,
+                authors=authors,
+                has_desc=bool(desc),
+                pages=pages,
+                genres_count=len(genres),
+            )
+            return {
+                "title": title,
+                "author": ", ".join(authors),
+                "description": desc,
+                "pages": pages,
+                "genres": genres,
+                "cover_url": cover_url,
+            }
+
+        except httpx.HTTPError as e:
+            log.debug("hardcover_error", isbn=isbn, error=str(e))
+            return None
 
     async def fetch_metadata(
         self, client: httpx.AsyncClient, isbn: str
@@ -113,67 +218,6 @@ class BookFetcher:
             log.debug("works_data_error", isbn=isbn, error=str(e))
             return result
 
-    async def fetch_google_books(
-        self, client: httpx.AsyncClient, isbn: str
-    ) -> dict | None:
-        """Fetch from Google Books with circuit breaker.
-
-        After the first 429, disables Google Books for the rest of the batch
-        to avoid wasting time on doomed retries.
-
-        Returns dict with 'description', 'price', and 'thumbnail' keys,
-        or None on failure.
-        """
-        if self._google_books_disabled:
-            return None
-
-        url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
-
-        await asyncio.sleep(1)  # pre-call delay to respect rate limits
-
-        try:
-            resp = await client.get(url, timeout=10)
-            if resp.status_code == 429:
-                log.warning(
-                    "google_books_rate_limited_disabling",
-                    isbn=isbn,
-                    msg="Disabling Google Books for remaining ISBNs",
-                )
-                self._google_books_disabled = True
-                return None
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("items", [])
-            if not items:
-                return None
-
-            volume = items[0].get("volumeInfo", {})
-            sale = items[0].get("saleInfo", {})
-
-            result: dict = {}
-
-            # Description
-            result["description"] = volume.get("description", "")
-
-            # Price from saleInfo.listPrice
-            list_price = sale.get("listPrice", {})
-            if list_price:
-                amount = list_price.get("amount")
-                currency = list_price.get("currencyCode", "")
-                if amount is not None:
-                    result["price"] = f"{currency} {amount}"
-
-            # Thumbnail
-            images = volume.get("imageLinks", {})
-            result["thumbnail"] = images.get("thumbnail", "")
-
-            log.debug("google_books_hit", isbn=isbn, has_price=bool(result.get("price")))
-            return result
-
-        except httpx.HTTPError as e:
-            log.debug("google_books_error", isbn=isbn, error=str(e))
-            return None
-
     async def _try_bookcover_api(
         self, client: httpx.AsyncClient, isbn: str
     ) -> str | None:
@@ -215,24 +259,24 @@ class BookFetcher:
         self,
         client: httpx.AsyncClient,
         isbn: str,
-        google_thumbnail: str = "",
+        hardcover_cover_url: str = "",
     ) -> tuple[Path | None, str, str]:
-        """Waterfall: Bookcover API → Google Books thumbnail → Open Library.
+        """Waterfall: Hardcover image → Bookcover API → Open Library.
 
         Returns (path, source_name, image_url).
         """
-        # 1. Bookcover API
+        # 1. Hardcover cover image
+        if hardcover_cover_url:
+            path = await self._download_image(client, hardcover_cover_url, isbn)
+            if path:
+                return path, "hardcover", hardcover_cover_url
+
+        # 2. Bookcover API
         url = await self._try_bookcover_api(client, isbn)
         if url:
             path = await self._download_image(client, url, isbn)
             if path:
                 return path, "bookcover_api", url
-
-        # 2. Google Books thumbnail
-        if google_thumbnail:
-            path = await self._download_image(client, google_thumbnail, isbn)
-            if path:
-                return path, "google_books", google_thumbnail
 
         # 3. Open Library
         url = self._open_library_url(isbn)
@@ -246,47 +290,46 @@ class BookFetcher:
         """Fetch all data for a single ISBN.
 
         Flow:
-        1. Open Library edition metadata
-        2. If no description → Open Library Works endpoint
-        3. If still no description OR no price → Google Books
-        4. Cover image waterfall
+        1. Try Hardcover API (title, author, description, pages, genres, cover image)
+        2. If no Hardcover match → Open Library edition + works (fallback)
+        3. Cover image waterfall: Hardcover → Bookcover API → Open Library
         """
         book = BookData(isbn=isbn)
-        google_thumbnail = ""
+        hardcover_cover_url = ""
 
-        # 1. Open Library edition metadata
-        metadata = await self.fetch_metadata(client, isbn)
-        if metadata:
-            book.title = metadata.get("title", "")
-            authors = metadata.get("authors", [])
-            book.author = ", ".join(authors) if authors else ""
-            book.description = metadata.get("description", "")
-            book.page_count = metadata.get("pageCount", 0)
-
-            # 2. If missing description or author, try Works endpoint
-            works_key = metadata.get("works_key", "")
-            if works_key and (not book.description or not book.author):
-                works = await self.fetch_works_data(client, works_key, isbn)
-                if not book.description and works["description"]:
-                    book.description = works["description"]
-                if not book.author and works["authors"]:
-                    book.author = ", ".join(works["authors"])
+        # 1. Try Hardcover API
+        hardcover = await self.fetch_hardcover(client, isbn)
+        if hardcover:
+            book.title = hardcover.get("title", "")
+            book.author = hardcover.get("author", "")
+            book.description = hardcover.get("description", "")
+            book.page_count = hardcover.get("pages", 0)
+            book.genres = hardcover.get("genres", [])
+            hardcover_cover_url = hardcover.get("cover_url", "")
         else:
-            book.errors.append("No metadata found")
+            # 2. Fallback to Open Library
+            metadata = await self.fetch_metadata(client, isbn)
+            if metadata:
+                book.title = metadata.get("title", "")
+                authors = metadata.get("authors", [])
+                book.author = ", ".join(authors) if authors else ""
+                book.description = metadata.get("description", "")
+                book.page_count = metadata.get("pageCount", 0)
 
-        # 3. Google Books enrichment (if missing description or price)
-        if not book.description or not book.price:
-            google = await self.fetch_google_books(client, isbn)
-            if google:
-                if not book.description and google.get("description"):
-                    book.description = google["description"]
-                if google.get("price"):
-                    book.price = google["price"]
-                google_thumbnail = google.get("thumbnail", "")
+                # If missing description or author, try Works endpoint
+                works_key = metadata.get("works_key", "")
+                if works_key and (not book.description or not book.author):
+                    works = await self.fetch_works_data(client, works_key, isbn)
+                    if not book.description and works["description"]:
+                        book.description = works["description"]
+                    if not book.author and works["authors"]:
+                        book.author = ", ".join(works["authors"])
+            else:
+                book.errors.append("No metadata found")
 
-        # 4. Cover image waterfall
+        # 3. Cover image waterfall
         image_path, source, image_url = await self.fetch_cover_image(
-            client, isbn, google_thumbnail
+            client, isbn, hardcover_cover_url
         )
         book.image_path = image_path
         book.image_source = source
@@ -305,7 +348,6 @@ class BookFetcher:
 
         on_progress is called with (index, total, book) after each ISBN completes.
         """
-        self._google_books_disabled = False
         results: list[BookData] = []
         async with httpx.AsyncClient() as client:
             for i, isbn in enumerate(isbns):

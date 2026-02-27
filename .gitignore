@@ -21,6 +21,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Secrets
+.env
+
 # App
 *.csv
 *.zip
