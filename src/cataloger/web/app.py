@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import tempfile
 from collections import defaultdict
@@ -19,6 +18,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from guard.middleware import SecurityMiddleware
+from guard.models import SecurityConfig
 
 from ..core.cache import BookCache
 from ..core.catalog import generate_csv_bytes
@@ -31,13 +32,12 @@ load_dotenv()
 log = structlog.get_logger()
 
 STATIC_DIR = Path(__file__).parent / "static"
-SESSION_TTL = 1800  # 30 minutes
-MAX_SESSIONS = 500  # cap total sessions to bound memory
-MAX_BODY_BYTES = 50_000  # ~50 KB max request body
+SESSION_TTL = 1800
+MAX_SESSIONS = 500
+MAX_BODY_BYTES = 50_000
 
-# Rate limiting: per-IP, requests to /api/lookup
-RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "10"))  # requests per window
-RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))  # seconds
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "10"))
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
 
 
 @dataclass
@@ -47,13 +47,8 @@ class Session:
     created_at: float = field(default_factory=time.time)
 
 
-# In-memory session store
 sessions: dict[str, Session] = {}
-
-# Rate limit tracking: IP -> list of timestamps
 _rate_log: dict[str, list[float]] = defaultdict(list)
-
-# ISBN lookup cache
 book_cache = BookCache()
 
 
@@ -74,7 +69,6 @@ def _client_ip(request: Request) -> str:
 def _is_rate_limited(ip: str) -> bool:
     now = time.time()
     window_start = now - RATE_LIMIT_WINDOW
-    # Trim old entries
     _rate_log[ip] = [t for t in _rate_log[ip] if t > window_start]
     return len(_rate_log[ip]) >= RATE_LIMIT
 
@@ -85,14 +79,14 @@ def _record_request(ip: str) -> None:
 
 app = FastAPI(title="Cataloger", docs_url=None, redoc_url=None)
 
-
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    return response
+security_config = SecurityConfig(
+    enable_redis=False,
+    auto_ban_threshold=5,
+    rate_limit=100,
+    custom_log_file="security.log",
+    blocked_user_agents=["curl", "wget", "python-requests", "Go-http-client", "Nuclei", "zgrab"],
+)
+app.add_middleware(SecurityMiddleware, config=security_config)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -116,7 +110,6 @@ async def index():
 
 @app.post("/api/lookup")
 async def lookup(request: Request):
-    # Rate limit check
     ip = _client_ip(request)
     if _is_rate_limited(ip):
         log.warning("rate_limited", ip=ip)
@@ -125,7 +118,6 @@ async def lookup(request: Request):
             status_code=429,
         )
 
-    # Request body size guard
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > MAX_BODY_BYTES:
         return JSONResponse({"error": "Request too large."}, status_code=413)
@@ -137,7 +129,6 @@ async def lookup(request: Request):
     if not location:
         return JSONResponse({"error": "Location name is required."}, status_code=400)
 
-    # Clean and deduplicate ISBNs
     isbns = []
     for raw in raw_isbns:
         cleaned = raw.strip().replace("-", "")
@@ -154,7 +145,6 @@ async def lookup(request: Request):
 
     _record_request(ip)
 
-    # Cap total sessions to bound memory
     _clean_expired()
     if len(sessions) >= MAX_SESSIONS:
         return JSONResponse(
