@@ -6,6 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Panat Taranat", email = "panat@dungeonbooks.com" }
 ]
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.133.1",

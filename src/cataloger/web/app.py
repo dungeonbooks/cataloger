@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from collections import defaultdict
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 import time
@@ -30,6 +32,12 @@ log = structlog.get_logger()
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_TTL = 1800  # 30 minutes
+MAX_SESSIONS = 500  # cap total sessions to bound memory
+MAX_BODY_BYTES = 50_000  # ~50 KB max request body
+
+# Rate limiting: per-IP, requests to /api/lookup
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "10"))  # requests per window
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))  # seconds
 
 
 @dataclass
@@ -42,6 +50,9 @@ class Session:
 # In-memory session store
 sessions: dict[str, Session] = {}
 
+# Rate limit tracking: IP -> list of timestamps
+_rate_log: dict[str, list[float]] = defaultdict(list)
+
 # ISBN lookup cache
 book_cache = BookCache()
 
@@ -53,8 +64,49 @@ def _clean_expired() -> None:
         sessions.pop(sid, None)
 
 
-app = FastAPI(title="Cataloger")
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _is_rate_limited(ip: str) -> bool:
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW
+    # Trim old entries
+    _rate_log[ip] = [t for t in _rate_log[ip] if t > window_start]
+    return len(_rate_log[ip]) >= RATE_LIMIT
+
+
+def _record_request(ip: str) -> None:
+    _rate_log[ip].append(time.time())
+
+
+app = FastAPI(title="Cataloger", docs_url=None, redoc_url=None)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": "0.1.0",
+        "environment": os.environ.get("ENV", "dev"),
+        "sessions_active": len(sessions),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -64,6 +116,20 @@ async def index():
 
 @app.post("/api/lookup")
 async def lookup(request: Request):
+    # Rate limit check
+    ip = _client_ip(request)
+    if _is_rate_limited(ip):
+        log.warning("rate_limited", ip=ip)
+        return JSONResponse(
+            {"error": "Too many requests. Please wait a minute and try again."},
+            status_code=429,
+        )
+
+    # Request body size guard
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_BYTES:
+        return JSONResponse({"error": "Request too large."}, status_code=413)
+
     body = await request.json()
     raw_isbns: list[str] = body.get("isbns", [])
     location: str = body.get("location", "").strip()
@@ -86,6 +152,16 @@ async def lookup(request: Request):
             {"error": "Maximum 100 ISBNs per request."}, status_code=400
         )
 
+    _record_request(ip)
+
+    # Cap total sessions to bound memory
+    _clean_expired()
+    if len(sessions) >= MAX_SESSIONS:
+        return JSONResponse(
+            {"error": "Server is busy. Please try again in a few minutes."},
+            status_code=503,
+        )
+
     tmp_dir = Path(tempfile.mkdtemp(prefix="cataloger_"))
     image_dir = tmp_dir / "images"
 
@@ -93,7 +169,6 @@ async def lookup(request: Request):
     fetcher = BookFetcher(image_dir=image_dir, hardcover_token=hardcover_token, cache=book_cache)
     books = await fetcher.fetch_all(isbns)
 
-    _clean_expired()
     session_id = uuid.uuid4().hex[:12]
     sessions[session_id] = Session(books=books, location=location)
 
@@ -177,9 +252,11 @@ async def download_all(session: str):
 
 
 def main():
+    port = int(os.environ.get("PORT", "8000"))
+    is_dev = os.environ.get("ENV", "dev") == "dev"
     uvicorn.run(
         "cataloger.web.app:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
+        port=port,
+        reload=is_dev,
     )

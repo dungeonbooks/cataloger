@@ -15,6 +15,10 @@ let currentSessionId = null;
     );
 })();
 
+// Footer year
+const yearEl = document.getElementById("footer-year");
+if (yearEl) yearEl.textContent = new Date().getFullYear();
+
 async function generate() {
   const locationInput = document.getElementById("location");
   const isbnsInput = document.getElementById("isbns");
