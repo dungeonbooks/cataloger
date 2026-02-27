@@ -27,3 +27,6 @@ Thumbs.db
 # App
 *.csv
 *.zip
+
+# Cache
+.cache/

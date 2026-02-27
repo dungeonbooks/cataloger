@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from ..core.cache import BookCache
 from ..core.catalog import generate_csv_bytes
 from ..core.fetcher import BookFetcher
 from ..core.images import create_combined_zip, create_image_zip
@@ -40,6 +41,9 @@ class Session:
 
 # In-memory session store
 sessions: dict[str, Session] = {}
+
+# ISBN lookup cache
+book_cache = BookCache()
 
 
 def _clean_expired() -> None:
@@ -86,7 +90,7 @@ async def lookup(request: Request):
     image_dir = tmp_dir / "images"
 
     hardcover_token = os.environ.get("HARDCOVER_TOKEN", "")
-    fetcher = BookFetcher(image_dir=image_dir, hardcover_token=hardcover_token)
+    fetcher = BookFetcher(image_dir=image_dir, hardcover_token=hardcover_token, cache=book_cache)
     books = await fetcher.fetch_all(isbns)
 
     _clean_expired()

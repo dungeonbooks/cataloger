@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import structlog
 
+from .cache import BookCache
 from .models import BookData
 
 log = structlog.get_logger()
@@ -41,10 +42,16 @@ class BookFetcher:
     Image waterfall: Hardcover image → Bookcover API → Open Library.
     """
 
-    def __init__(self, image_dir: Path, hardcover_token: str = "") -> None:
+    def __init__(
+        self,
+        image_dir: Path,
+        hardcover_token: str = "",
+        cache: BookCache | None = None,
+    ) -> None:
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self.hardcover_token = hardcover_token
+        self.cache = cache
 
     async def fetch_hardcover(
         self, client: httpx.AsyncClient, isbn: str
@@ -286,14 +293,45 @@ class BookFetcher:
 
         return None, "", ""
 
+    def _book_from_cache(
+        self, isbn: str, metadata: dict, image_bytes: bytes | None, image_source: str, image_url: str
+    ) -> BookData:
+        """Build a BookData from cached values and write image to disk."""
+        book = BookData(
+            isbn=isbn,
+            title=metadata.get("title", ""),
+            author=metadata.get("author", ""),
+            description=metadata.get("description", ""),
+            page_count=metadata.get("page_count", 0),
+            genres=metadata.get("genres", []),
+            image_source=image_source,
+            image_url=image_url,
+        )
+        if image_bytes:
+            dest = self.image_dir / f"{isbn}.jpg"
+            dest.write_bytes(image_bytes)
+            book.image_path = dest
+        else:
+            book.errors.append("No cover image found")
+        return book
+
     async def fetch_book(self, client: httpx.AsyncClient, isbn: str) -> BookData:
         """Fetch all data for a single ISBN.
 
         Flow:
+        0. Check cache — return immediately on hit
         1. Try Hardcover API (title, author, description, pages, genres, cover image)
         2. If no Hardcover match → Open Library edition + works (fallback)
         3. Cover image waterfall: Hardcover → Bookcover API → Open Library
+        4. Store result in cache
         """
+        # 0. Cache check
+        if self.cache:
+            cached = self.cache.get(isbn)
+            if cached:
+                self._last_cache_hit = True
+                return self._book_from_cache(isbn, *cached)
+
         book = BookData(isbn=isbn)
         hardcover_cover_url = ""
 
@@ -337,6 +375,23 @@ class BookFetcher:
         if not image_path:
             book.errors.append("No cover image found")
 
+        # 4. Store in cache
+        if self.cache and book.title:
+            image_bytes = book.image_path.read_bytes() if book.image_path else None
+            self.cache.put(
+                isbn,
+                {
+                    "title": book.title,
+                    "author": book.author,
+                    "description": book.description,
+                    "page_count": book.page_count,
+                    "genres": book.genres,
+                },
+                image_bytes,
+                book.image_source,
+                book.image_url,
+            )
+
         return book
 
     async def fetch_all(
@@ -347,14 +402,16 @@ class BookFetcher:
         """Fetch data for all ISBNs with staggered starts to avoid rate limits.
 
         on_progress is called with (index, total, book) after each ISBN completes.
+        Cache hits skip the rate-limit sleep since no API call is made.
         """
         results: list[BookData] = []
         async with httpx.AsyncClient() as client:
             for i, isbn in enumerate(isbns):
+                self._last_cache_hit = False
                 book = await self.fetch_book(client, isbn)
                 results.append(book)
                 if on_progress:
                     on_progress(i + 1, len(isbns), book)
-                if i < len(isbns) - 1:
+                if i < len(isbns) - 1 and not self._last_cache_hit:
                     await asyncio.sleep(0.3)
         return results
